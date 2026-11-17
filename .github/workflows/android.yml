@@ -39,8 +39,10 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          git clone --quiet --filter=blob:none --no-checkout             https://gitlab.com/my-denia-group/Petergram-Android.git petergram-source
+          mkdir petergram-source
           cd petergram-source
+          git init --quiet
+          git remote add origin https://gitlab.com/my-denia-group/Petergram-Android.git
           git fetch --no-tags --depth=1 origin "$SOURCE_REF"
           git checkout --detach FETCH_HEAD
           git rev-parse HEAD | tee "$RUNNER_TEMP/gitlab-source-sha.txt"
