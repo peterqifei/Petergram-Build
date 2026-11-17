@@ -11,7 +11,7 @@ on:
       build_mode:
         description: 'Run source integrity only, or attempt a complete arm64 debug APK'
         required: true
-        default: source-check
+        default: debug-apk
         type: choice
         options:
           - source-check
