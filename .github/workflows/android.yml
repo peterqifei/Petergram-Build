@@ -1,0 +1,161 @@
+name: Android arm64 build
+
+on:
+  workflow_dispatch:
+    inputs:
+      source_ref:
+        description: 'Petergram-Android GitLab branch, tag, or commit'
+        required: true
+        default: main
+        type: string
+      build_mode:
+        description: 'Run source integrity only, or attempt a complete arm64 debug APK'
+        required: true
+        default: source-check
+        type: choice
+        options:
+          - source-check
+          - debug-apk
+
+permissions:
+  contents: read
+
+concurrency:
+  group: petergram-android-manual
+  cancel-in-progress: false
+
+jobs:
+  android:
+    name: Android ${{ inputs.build_mode }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 330
+    env:
+      PETERGRAM_ROOT: ${{ runner.temp }}/petergram-android
+      SOURCE_REF: ${{ inputs.source_ref }}
+      BUILD_MODE: ${{ inputs.build_mode }}
+      NATIVE_TARGET: arm64-v8a
+    steps:
+      - name: Clone GitLab source at requested revision
+        shell: bash
+        run: |
+          set -euo pipefail
+          git clone --quiet --filter=blob:none --no-checkout             https://gitlab.com/my-denia-group/Petergram-Android.git petergram-source
+          cd petergram-source
+          git fetch --no-tags --depth=1 origin "$SOURCE_REF"
+          git checkout --detach FETCH_HEAD
+          git rev-parse HEAD | tee "$RUNNER_TEMP/gitlab-source-sha.txt"
+          git status --porcelain
+          cat source.lock.json
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Disk baseline
+        shell: bash
+        run: |
+          df -h /
+          free -h
+          du -sh petergram-source
+
+      - name: Source-only validation
+        if: inputs.build_mode == 'source-check'
+        working-directory: petergram-source
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$PETERGRAM_ROOT/toolchain"
+          ln -s "$JAVA_HOME" "$PETERGRAM_ROOT/toolchain/jdk-17"
+          bash scripts/ci-source.sh
+          echo "gitlab_commit=$(cat "$RUNNER_TEMP/gitlab-source-sha.txt")"
+          df -h /
+
+      - name: Free unused runner images for native build
+        if: inputs.build_mode == 'debug-apk'
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo rm -rf /usr/share/dotnet /usr/local/share/powershell /opt/hostedtoolcache/CodeQL
+          df -h /
+
+      - name: Install Android command line tools
+        if: inputs.build_mode == 'debug-apk'
+        uses: android-actions/setup-android@v3
+
+      - name: Install pinned Android SDK, NDK and CMake
+        if: inputs.build_mode == 'debug-apk'
+        working-directory: petergram-source
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import json, os
+          lock = json.load(open('source.lock.json', encoding='utf-8'))['toolchain']
+          with open(os.environ['GITHUB_ENV'], 'a', encoding='utf-8') as out:
+              print(f"SDK_PLATFORM={lock['sdk_platform']}", file=out)
+              print(f"SDK_BUILD_TOOLS={lock['build_tools']}", file=out)
+              print(f"SDK_NDK={lock['ndk']}", file=out)
+              print(f"SDK_CMAKE={lock['cmake']}", file=out)
+          PY
+
+      - name: Install exact Android toolchain
+        if: inputs.build_mode == 'debug-apk'
+        shell: bash
+        run: |
+          set -euo pipefail
+          sdkmanager --install \
+            "platforms;android-$SDK_PLATFORM" \
+            "build-tools;$SDK_BUILD_TOOLS" \
+            "ndk;$SDK_NDK" \
+            "cmake;$SDK_CMAKE"
+          mkdir -p "$PETERGRAM_ROOT/toolchain"
+          ln -s "$JAVA_HOME" "$PETERGRAM_ROOT/toolchain/jdk-17"
+          ln -s "$ANDROID_HOME" "$PETERGRAM_ROOT/toolchain/sdk"
+          df -h /
+
+      - name: Reconstruct locked Nagram and compile Petergram debug APK
+        if: inputs.build_mode == 'debug-apk'
+        working-directory: petergram-source
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash scripts/init-secrets.sh
+          bash scripts/apply.sh
+          bash scripts/build.sh :TMessagesProj:assembleDebug
+          df -h /
+
+      - name: Validate APK and record source identity
+        if: inputs.build_mode == 'debug-apk'
+        working-directory: petergram-source
+        shell: bash
+        run: |
+          set -euo pipefail
+          mapfile -d '' apks < <(find "$PETERGRAM_ROOT/vendor/TMessagesProj/build/outputs/apk/debug" -name '*.apk' -type f -print0)
+          [ "${#apks[@]}" -eq 1 ] || { echo "Expected one debug APK; got ${#apks[@]}"; exit 1; }
+          bash scripts/check.sh apk "${apks[0]}"
+          mkdir -p "$RUNNER_TEMP/petergram-result"
+          cp "${apks[0]}" "$RUNNER_TEMP/petergram-result/Petergram-Android-arm64-CI-debug.apk"
+          sha256sum "$RUNNER_TEMP/petergram-result/Petergram-Android-arm64-CI-debug.apk" \
+            | tee "$RUNNER_TEMP/petergram-result/SHA256SUMS"
+          printf 'gitlab_commit=%s\nmode=debug-apk\nabi=arm64-v8a\nsigning=ephemeral-ci-debug\n' \
+            "$(cat "$RUNNER_TEMP/gitlab-source-sha.txt")" \
+            > "$RUNNER_TEMP/petergram-result/BUILD-IDENTITY.txt"
+
+      - name: Upload disposable debug APK
+        if: inputs.build_mode == 'debug-apk' && success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: petergram-android-arm64-ci-debug
+          path: ${{ runner.temp }}/petergram-result/
+          retention-days: 7
+          if-no-files-found: error
+
+      - name: Final resource usage
+        if: always()
+        shell: bash
+        run: |
+          df -h /
+          free -h
+          echo "CI artifact uses a new ephemeral debug signing key and placeholder Telegram API credentials."
+          echo "Do not install over the daily-use Petergram app or treat this as a signed release."
