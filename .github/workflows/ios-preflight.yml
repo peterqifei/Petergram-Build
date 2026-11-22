@@ -1,0 +1,71 @@
+name: Petergram iOS Linux pre-Mac gate
+
+on:
+  workflow_dispatch:
+    inputs:
+      gitlab_commit:
+        description: "Exact 40-character Petergram-iOS GitLab commit SHA"
+        type: string
+        required: true
+
+permissions:
+  contents: read
+
+concurrency:
+  group: petergram-ios-preflight
+  cancel-in-progress: false
+
+jobs:
+  pre-mac:
+    name: Source + Swift contract checks (not Xcode)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    env:
+      SOURCE_COMMIT: ${{ inputs.gitlab_commit }}
+      GIT_TERMINAL_PROMPT: '0'
+    steps:
+      - name: Install matching Linux Swift 6.2 compiler
+        uses: swift-actions/setup-swift@v2
+        with:
+          swift-version: '6.2.1'
+
+      - name: Verify resources
+        shell: bash
+        run: |
+          set -euo pipefail
+          swiftc --version
+          python3 --version
+          df -h /
+
+      - name: Fetch exact source commit from GitLab
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$SOURCE_COMMIT" =~ ^[0-9a-f]{40}$ ]] || { echo 'Exact GitLab SHA required'; exit 2; }
+          mkdir -p petergram-ios
+          git -C petergram-ios init --quiet
+          git -C petergram-ios remote add origin https://gitlab.com/my-denia-group/Petergram-iOS.git
+          git -C petergram-ios fetch --no-tags --depth=1 origin "$SOURCE_COMMIT"
+          git -C petergram-ios checkout --detach FETCH_HEAD
+          test "$(git -C petergram-ios rev-parse HEAD)" = "$SOURCE_COMMIT"
+          df -h /
+
+      - name: Run source + compiler-contract preflight
+        working-directory: petergram-ios
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash scripts/pre-mac-preflight.sh
+
+      - name: Upload source identity and check receipt
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: petergram-ios-linux-preflight
+          path: petergram-ios/preflight-receipt.json
+          retention-days: 7
+          if-no-files-found: error
+
+      - name: Record remaining disk space
+        if: always()
+        run: df -h /
