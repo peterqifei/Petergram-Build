@@ -10,7 +10,7 @@ on:
         type: string
         required: true
       suite:
-        description: "preflight: the 33-check suite. verifiers: the specialised verify-* scripts outside it."
+        description: "preflight: the pre-Mac preflight suite. verifiers: the specialised verify-* scripts outside it."
         type: choice
         options:
           - preflight
