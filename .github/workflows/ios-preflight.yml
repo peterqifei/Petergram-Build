@@ -1,5 +1,7 @@
 name: Petergram iOS Linux pre-Mac gate
 
+run-name: ios-preflight ${{ inputs.suite }} ${{ inputs.request_id }} ${{ inputs.gitlab_commit }}
+
 on:
   workflow_dispatch:
     inputs:
@@ -7,6 +9,18 @@ on:
         description: "Exact 40-character Petergram-iOS GitLab commit SHA"
         type: string
         required: true
+      suite:
+        description: "preflight: the 33-check suite. verifiers: the specialised verify-* scripts outside it."
+        type: choice
+        options:
+          - preflight
+          - verifiers
+        default: preflight
+      request_id:
+        description: "Set by scripts/github-preflight.sh so it can find its run by title"
+        type: string
+        required: false
+        default: ''
 
 permissions:
   contents: read
@@ -25,7 +39,8 @@ jobs:
       GIT_TERMINAL_PROMPT: '0'
     steps:
       - name: Install matching Linux Swift 6.2 compiler
-        uses: swift-actions/setup-swift@v2
+        # swift-actions/setup-swift v2.4.0, pinned to its commit
+        uses: swift-actions/setup-swift@7ca6abe6b3b0e8b5421b88be48feee39cbf52c6a
         with:
           swift-version: '6.2.1'
 
@@ -51,18 +66,27 @@ jobs:
           df -h /
 
       - name: Run source + compiler-contract preflight
+        if: inputs.suite == 'preflight'
         working-directory: petergram-ios
         shell: bash
         run: |
           set -euo pipefail
           bash scripts/pre-mac-preflight.sh
 
+      - name: Run the specialised verifiers
+        if: inputs.suite == 'verifiers'
+        working-directory: petergram-ios
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash scripts/run-verifiers.sh
+
       - name: Upload source identity and check receipt
         if: success()
         uses: actions/upload-artifact@v4
         with:
-          name: petergram-ios-linux-preflight
-          path: petergram-ios/preflight-receipt.json
+          name: petergram-ios-linux-${{ inputs.suite }}
+          path: petergram-ios/${{ inputs.suite }}-receipt.json
           retention-days: 7
           if-no-files-found: error
 
