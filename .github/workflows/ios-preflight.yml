@@ -26,7 +26,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: petergram-ios-preflight
+  group: petergram-ios-${{ inputs.suite }}
   cancel-in-progress: false
 
 jobs:
@@ -83,7 +83,8 @@ jobs:
 
       - name: Upload source identity and check receipt
         if: success()
-        uses: actions/upload-artifact@v4
+        # actions/upload-artifact v7.0.2, pinned to its commit
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         with:
           name: petergram-ios-linux-${{ inputs.suite }}
           path: petergram-ios/${{ inputs.suite }}-receipt.json
